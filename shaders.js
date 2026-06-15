@@ -85,8 +85,8 @@ window.fragmentShaderSource = `
         // Calculate distance in aspect-corrected space
         float d = distance(warpedUv, correctedPos);
         
-        // Smooth smoke border glow: dynamic radius on hover
-        float glowRadius = 0.35 + 0.05 * sin(time * 2.0 + hash(pos) * 6.28);
+        // Smooth smoke border glow: dynamic radius on hover (using static type as seed to prevent hover jitter blinking)
+        float glowRadius = 0.35 + 0.05 * sin(time * 2.0 + hash(vec2(type, 1.0)) * 6.28);
         float g = smoothstep(glowRadius, 0.0, d) * hov;
         
         // Choose vibrant colors

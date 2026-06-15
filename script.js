@@ -98,12 +98,12 @@
         const cards = [
             ...Array.from(document.querySelectorAll('.project-card')),
             ...Array.from(document.querySelectorAll('.lab-card'))
-        ].map(el => {
+        ].map((el, idx) => {
             const meta = cardMetadata[el.id] || { type: 0.0, color: '#00F0FF' };
             el.style.setProperty('--card-color', meta.color);
             return {
                 el,
-                type: meta.type,
+                type: meta.type + idx * 0.01,
                 hover: 0.0,
                 target: 0.0
             };
