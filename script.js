@@ -1,5 +1,6 @@
-// ========================================
+// ========================================  
 // Kunu AI Labs Portfolio - JavaScript
+
 // ========================================
 
 document.addEventListener('DOMContentLoaded', () => {
