@@ -1,334 +1,488 @@
 // ==========================================================================
-// Kunu.dev - Native WebGL2 Engine (Zero Dependencies)
+// Kunu.dev - Premium Minimalist Page Snapping Controller & WebGL Card Glows
+// Zero dependencies, lightweight and hardware-accelerated
 // ==========================================================================
 
 (function () {
     'use strict';
 
-    const state = {
-        mouse: { x: 0.5, y: 0.5 },
-        targetMouse: { x: 0.5, y: 0.5 },
-        scrollVelocity: 0,
-        easedVelocity: 0,
-        lastScrollY: 0,
-        startTime: Date.now()
-    };
+    let currentSectionIndex = 0;
+    let isTransitioning = false;
+    let lastTransitionTime = 0;
+    let sections = [];
+    let cards = [];
+
+    // Shared WebGL Renderer state
+    let gl, sharedCanvas, shaderProgram;
+    let uTimeLoc, uResLoc, uTypeLoc, uC1Loc, uC2Loc;
+    const startTime = Date.now();
 
     window.addEventListener('DOMContentLoaded', () => {
-        initWebGL();
-        initRevealAnimations();
-        initNavbarScroll();
-        updateFooterYear();
-        animateCodeLines();
+        sections = Array.from(document.querySelectorAll('.section'));
+        initScrollJack();
+        initNavbarLinks();
+        initDigitalClock();
+        
+        // Initial setup for code terminal typing lines if active on load
+        if (currentSectionIndex === 1) {
+            animateCodeLines();
+        }
+
+        // Initialize Shared WebGL context for card glows
+        initSharedWebGL();
+        initCardGlows();
     });
 
     // ========================================================================
-    // RAW WEBGL2 — Zero dependencies, always works
+    // SMOOTH PAGE TRANSITION
     // ========================================================================
-    function initWebGL() {
-        const canvas = document.getElementById('webgl-canvas');
-        if (!canvas) return;
+    window.triggerTransitionToSection = function (toIndex) {
+        const now = Date.now();
+        if (isTransitioning || (now - lastTransitionTime < 950) || toIndex === currentSectionIndex || toIndex < 0 || toIndex >= sections.length) return;
+        
+        isTransitioning = true;
+        lastTransitionTime = now;
+        const fromIndex = currentSectionIndex;
+        const fromSec = sections[fromIndex];
+        const toSec = sections[toIndex];
+        
+        // Update Navbar Links
+        document.querySelectorAll('.navbar .nav-link').forEach(link => {
+            const idx = parseInt(link.getAttribute('data-section'), 10);
+            link.classList.toggle('active', idx === toIndex);
+        });
+        
+        // Trigger CSS-driven transition
+        fromSec.classList.add('exit');
+        fromSec.classList.remove('active');
+        
+        toSec.classList.add('active');
+        toSec.scrollTop = 0;
+        
+        currentSectionIndex = toIndex;
+        
+        if (toIndex === 1) {
+            animateCodeLines();
+        }
+        
+        setTimeout(() => {
+            fromSec.classList.remove('exit');
+            isTransitioning = false;
+        }, 550); // Matches the 0.55s CSS transition
+    };
 
-        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-        if (!gl) { console.warn('WebGL not supported'); return; }
-
-        const vertSrc = window.vertexShaderSource;
-        const fragSrc = window.fragmentShaderSource;
-
-        function compile(type, src) {
-            const s = gl.createShader(type);
-            gl.shaderSource(s, src); gl.compileShader(s);
-            if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-                console.error('Shader error:', gl.getShaderInfoLog(s)); return null;
+    // ========================================================================
+    // SNAPPING SCROLL-JACK CONTROLLER
+    // ========================================================================
+    function initScrollJack() {
+        window.addEventListener('wheel', e => {
+            const now = Date.now();
+            if (isTransitioning || (now - lastTransitionTime < 950)) {
+                e.preventDefault(); return;
             }
-            return s;
+            
+            const sec = sections[currentSectionIndex];
+            if (!sec) return;
+            
+            const deltaY = e.deltaY;
+            if (deltaY > 0) {
+                const isAtBottom = Math.ceil(sec.scrollTop + sec.clientHeight) >= sec.scrollHeight - 2;
+                if (isAtBottom) {
+                    e.preventDefault();
+                    triggerSectionTransition(currentSectionIndex + 1);
+                }
+            } else if (deltaY < 0) {
+                const isAtTop = sec.scrollTop <= 2;
+                if (isAtTop) {
+                    e.preventDefault();
+                    triggerSectionTransition(currentSectionIndex - 1);
+                }
+            }
+        }, { passive: false });
+
+        window.addEventListener('keydown', e => {
+            const now = Date.now();
+            if (isTransitioning || (now - lastTransitionTime < 950)) {
+                e.preventDefault(); return;
+            }
+            
+            const sec = sections[currentSectionIndex];
+            if (!sec) return;
+            
+            if (e.key === 'ArrowDown' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) {
+                const isAtBottom = Math.ceil(sec.scrollTop + sec.clientHeight) >= sec.scrollHeight - 2;
+                if (isAtBottom) {
+                    e.preventDefault();
+                    triggerSectionTransition(currentSectionIndex + 1);
+                }
+            } else if (e.key === 'ArrowUp' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) {
+                const isAtTop = sec.scrollTop <= 2;
+                if (isAtTop) {
+                    e.preventDefault();
+                    triggerSectionTransition(currentSectionIndex - 1);
+                }
+            }
+        });
+
+        let touchStartY = 0;
+        window.addEventListener('touchstart', e => {
+            touchStartY = e.touches[0].clientY;
+        }, { passive: true });
+
+        window.addEventListener('touchmove', e => {
+            const now = Date.now();
+            if (isTransitioning || (now - lastTransitionTime < 950)) {
+                e.preventDefault(); return;
+            }
+            
+            const sec = sections[currentSectionIndex];
+            if (!sec) return;
+            
+            const touchEndY = e.touches[0].clientY;
+            const diffY = touchStartY - touchEndY;
+            
+            if (Math.abs(diffY) > 55) {
+                if (diffY > 0) {
+                    const isAtBottom = Math.ceil(sec.scrollTop + sec.clientHeight) >= sec.scrollHeight - 2;
+                    if (isAtBottom) {
+                        triggerSectionTransition(currentSectionIndex + 1);
+                    }
+                } else {
+                    const isAtTop = sec.scrollTop <= 2;
+                    if (isAtTop) {
+                        triggerSectionTransition(currentSectionIndex - 1);
+                    }
+                }
+                touchStartY = touchEndY;
+            }
+        }, { passive: false });
+    }
+
+    function triggerSectionTransition(toIdx) {
+        if (window.triggerTransitionToSection) {
+            window.triggerTransitionToSection(toIdx);
+        }
+    }
+
+    function initNavbarLinks() {
+        document.querySelectorAll('.navbar .nav-link').forEach(link => {
+            link.addEventListener('click', e => {
+                e.preventDefault();
+                const toIdx = parseInt(link.getAttribute('data-section'), 10);
+                triggerSectionTransition(toIdx);
+            });
+        });
+
+        document.querySelectorAll('.nav-trigger').forEach(btn => {
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                const toIdx = parseInt(btn.getAttribute('data-section'), 10);
+                triggerSectionTransition(toIdx);
+            });
+        });
+    }
+
+    function animateCodeLines() {
+        const lines = document.querySelectorAll('#about .code-line');
+        lines.forEach(l => l.classList.remove('visible'));
+        lines.forEach((line, i) => {
+            setTimeout(() => {
+                if (currentSectionIndex === 1) {
+                    line.classList.add('visible');
+                }
+            }, 300 + i * 160);
+        });
+    }
+
+    function initDigitalClock() {
+        const clockEl = document.getElementById('live-time');
+        if (!clockEl) return;
+        
+        function update() {
+            const options = {
+                timeZone: 'Asia/Kolkata',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            };
+            const timeStr = new Intl.DateTimeFormat('en-US', options).format(new Date());
+            clockEl.textContent = timeStr;
+        }
+        
+        update();
+        setInterval(update, 1000);
+    }
+
+    // ========================================================================
+    // SHARED WEBGL CARD GLOW RENDERER (NO CONTEXT LIMITS, PERFECT CLIPPING)
+    // ========================================================================
+    function initSharedWebGL() {
+        sharedCanvas = document.createElement('canvas');
+        sharedCanvas.width = 200;
+        sharedCanvas.height = 200;
+        gl = sharedCanvas.getContext('webgl') || sharedCanvas.getContext('experimental-webgl');
+        
+        if (!gl) {
+            console.warn('WebGL not supported for bento hover glows');
+            return;
         }
 
-        const vs = compile(gl.VERTEX_SHADER, vertSrc);
-        const fs = compile(gl.FRAGMENT_SHADER, fragSrc);
+        const vsSource = `
+            attribute vec2 a_pos;
+            varying vec2 v_uv;
+            void main() {
+                v_uv = a_pos * 0.5 + 0.5;
+                gl_Position = vec4(a_pos, 0.0, 1.0);
+            }
+        `;
+
+        const fsSource = `
+            precision highp float;
+            varying vec2 v_uv;
+            uniform float u_time;
+            uniform vec2 u_res;
+            uniform vec3 u_c1;
+            uniform vec3 u_c2;
+            uniform float u_type;
+
+            // Simple Fractional Brownian Motion Noise
+            float hash(vec2 p) {
+                p = fract(p * vec2(127.1, 311.7));
+                return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+            }
+            
+            float noise(vec2 p) {
+                vec2 i = floor(p);
+                vec2 f = fract(p);
+                float a = hash(i);
+                float b = hash(i + vec2(1.0, 0.0));
+                float c = hash(i + vec2(0.0, 1.0));
+                float d = hash(i + vec2(1.0, 1.0));
+                vec2 u = f * f * (3.0 - 2.0 * f);
+                return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+            }
+            
+            float fbm(vec2 p) {
+                float v = 0.0;
+                float a = 0.5;
+                for (int i = 0; i < 3; ++i) {
+                    v += a * noise(p);
+                    p = p * 2.0 + vec2(10.0);
+                    a *= 0.5;
+                }
+                return v;
+            }
+
+            void main() {
+                vec2 uv = v_uv;
+                float ar = u_res.x / u_res.y;
+                vec2 p = uv;
+                p.x *= ar;
+                
+                float t = u_time * 0.45;
+                
+                // Flowing noise offsets
+                vec2 q = vec2(0.0);
+                q.x = fbm(p + vec2(t * 0.2, t * 0.1));
+                q.y = fbm(p + vec2(-t * 0.1, t * 0.3));
+                
+                vec2 r = vec2(0.0);
+                r.x = fbm(p + 3.0 * q + vec2(t * 0.15, t * 0.05));
+                r.y = fbm(p + 3.0 * q + vec2(t * -0.1, t * 0.2));
+                
+                float f = fbm(p + 2.0 * r);
+                vec3 col = vec3(0.008, 0.008, 0.012); // Deep card background
+                
+                if (u_type < 0.5) {
+                    // Type 0: Flutter / App Dev: Cyan / Blue / Indigo
+                    float d = distance(uv, vec2(0.5, -0.1));
+                    float glow = smoothstep(1.1, 0.0, d * 1.1);
+                    col = mix(col, u_c1, glow * f * 1.3);
+                    col = mix(col, u_c2, smoothstep(0.7, 0.0, d) * 0.8);
+                    col += vec3(1.0) * smoothstep(0.4, 0.0, d) * 0.3;
+                } 
+                else if (u_type < 1.5) {
+                    // Type 1: About Main / Dart / ScriptSketch: Orange / Yellow / Red
+                    float d = distance(uv, vec2(0.5, -0.2));
+                    float glow = smoothstep(1.3, 0.0, d);
+                    col = mix(col, u_c1, glow * f * 1.3);
+                    col = mix(col, u_c2, smoothstep(0.8, 0.0, distance(uv, vec2(0.8, 0.3))) * 0.7);
+                    col += vec3(1.0) * smoothstep(0.5, 0.0, d) * 0.4;
+                }
+                else if (u_type < 2.5) {
+                    // Type 2: Fake Call AI / Pink / Magenta / Blue
+                    float d1 = distance(uv, vec2(0.2, 0.2));
+                    float d2 = distance(uv, vec2(0.8, 0.8));
+                    float glow1 = smoothstep(1.0, 0.0, d1) * f;
+                    float glow2 = smoothstep(1.0, 0.0, d2) * (1.0 - f);
+                    col = mix(col, u_c1, glow1 * 1.2);
+                    col = mix(col, u_c2, glow2 * 1.2);
+                    col += vec3(1.0) * smoothstep(0.6, 0.0, d1) * 0.25;
+                    col += vec3(1.0) * smoothstep(0.5, 0.0, d2) * 0.25;
+                }
+                else if (u_type < 3.5) {
+                    // Type 3: http_certificate_guard / Green / Teal / Emerald / Star Flare
+                    float d = distance(uv, vec2(0.5, 0.5));
+                    float glow = smoothstep(0.7, 0.0, d) * f;
+                    col = mix(col, u_c1, glow * 1.5);
+                    col = mix(col, u_c2, smoothstep(0.4, 0.0, d) * 0.8);
+                    
+                    // Star flare
+                    float star = smoothstep(0.08, 0.0, abs(uv.x - 0.5) + abs(uv.y - 0.5) * 5.0) +
+                                 smoothstep(0.08, 0.0, abs(uv.y - 0.5) + abs(uv.x - 0.5) * 5.0);
+                    col += vec3(1.0) * star * 0.8;
+                }
+                else {
+                    // Type 4: Purple / Blue / Pink
+                    float d = distance(uv, vec2(0.5, 0.0));
+                    float glow = smoothstep(1.1, 0.0, d);
+                    col = mix(col, u_c1, glow * f * 1.2);
+                    col = mix(col, u_c2, smoothstep(0.6, 0.0, d) * 0.9);
+                    col += vec3(1.0) * smoothstep(0.3, 0.0, d) * 0.45;
+                }
+                
+                gl_FragColor = vec4(col, 1.0);
+            }
+        `;
+
+        const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+        const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
         if (!vs || !fs) return;
 
-        const prog = gl.createProgram();
-        gl.attachShader(prog, vs); gl.attachShader(prog, fs);
-        gl.linkProgram(prog);
-        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-            console.error('Link error:', gl.getProgramInfoLog(prog)); return;
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vs);
+        gl.attachShader(shaderProgram, fs);
+        gl.linkProgram(shaderProgram);
+        
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            console.error('Shared shader link error:', gl.getProgramInfoLog(shaderProgram));
+            return;
         }
-        gl.useProgram(prog);
 
-        // Full-screen quad
+        gl.useProgram(shaderProgram);
+
+        // Quad geometry setup
         const buf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
-        const posLoc = gl.getAttribLocation(prog, 'a_pos');
+        const posLoc = gl.getAttribLocation(shaderProgram, 'a_pos');
         gl.enableVertexAttribArray(posLoc);
         gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-        // Cache uniforms
-        const U = {};
-        ['u_time','u_mouse','u_scroll','u_res',
-         'u_p0','u_h0','u_t0','u_p1','u_h1','u_t1',
-         'u_p2','u_h2','u_t2','u_p3','u_h3','u_t3',
-         'u_p4','u_h4','u_t4','u_p5','u_h5','u_t5',
-         'u_p6','u_h6','u_t6'
-        ].forEach(n => U[n] = gl.getUniformLocation(prog, n));
+        // Cache uniform references
+        uTimeLoc = gl.getUniformLocation(shaderProgram, 'u_time');
+        uResLoc = gl.getUniformLocation(shaderProgram, 'u_res');
+        uTypeLoc = gl.getUniformLocation(shaderProgram, 'u_type');
+        uC1Loc = gl.getUniformLocation(shaderProgram, 'u_c1');
+        uC2Loc = gl.getUniformLocation(shaderProgram, 'u_c2');
+    }
 
-        // Cache project visual uniforms
-        const U_vpos = [];
-        const U_vsize = [];
-        const U_vhover = [];
-        for (let i = 0; i < 4; i++) {
-            U_vpos.push(gl.getUniformLocation(prog, `u_vpos[${i}]`));
-            U_vsize.push(gl.getUniformLocation(prog, `u_vsize[${i}]`));
-            U_vhover.push(gl.getUniformLocation(prog, `u_vhover[${i}]`));
+    function compileShader(type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+            console.error('Shared shader compile error:', gl.getShaderInfoLog(s));
+            return null;
         }
+        return s;
+    }
 
-        // Define card personas to synchronize CSS glows and WebGL shader colors
-        const cardMetadata = {
-            'project-deep-search': { type: 0.0, color: '#00F0FF' }, // Cyan
-            'project-scriptsketch': { type: 1.0, color: '#FFA500' }, // Gold/Orange
-            'project-fake-call': { type: 2.0, color: '#FF00FF' }, // Magenta
-            'project-http-guard': { type: 3.0, color: '#00FF88' }, // Emerald Green
-            'service-app-dev': { type: 0.0, color: '#00F0FF' }, // Cyan
-            'service-ai-eng': { type: 4.0, color: '#7000FF' }, // Violet
-            'service-backend': { type: 5.0, color: '#1a75ff' } // Indigo Blue
-        };
+    function initCardGlows() {
+        if (!gl) return;
 
-        // Track cards for WebGL glow
-        const cards = [
-            ...Array.from(document.querySelectorAll('.project-card')),
-            ...Array.from(document.querySelectorAll('.lab-card'))
-        ].map(el => {
-            const meta = cardMetadata[el.id] || { type: 0.0, color: '#00F0FF' };
-            el.style.setProperty('--card-color', meta.color);
-            return {
-                el,
-                type: meta.type,
-                hover: 0.0,
-                target: 0.0
+        cards = Array.from(document.querySelectorAll('.bento-card')).map(cardEl => {
+            const canvas = cardEl.querySelector('.card-glow-canvas');
+            const ctx = canvas ? canvas.getContext('2d') : null;
+            
+            // Configuration variables mapped from CSS / Theme requirements
+            let type = 4.0;
+            let c1 = [0.55, 0.16, 0.96]; // Purple accent
+            let c2 = [1.0, 0.0, 0.47];   // Pink accent
+            
+            if (cardEl.id === 'project-deep-search' || cardEl.id === 'service-app-dev' || cardEl.classList.contains('bento-tech-stack')) {
+                type = 0.0;
+                c1 = [0.05, 0.65, 0.91]; // Cyan/Sky
+                c2 = [0.15, 0.28, 0.95]; // Deep Blue
+            } else if (cardEl.id === 'project-scriptsketch' || cardEl.classList.contains('bento-about-main')) {
+                type = 1.0;
+                c1 = [0.96, 0.35, 0.06]; // Orange/Red
+                c2 = [0.98, 0.72, 0.03]; // Gold
+            } else if (cardEl.id === 'project-fake-call') {
+                type = 2.0;
+                c1 = [0.98, 0.02, 0.52]; // Pink
+                c2 = [0.44, 0.0, 1.0];   // Violet
+            } else if (cardEl.id === 'project-http-guard' || cardEl.id === 'service-backend' || cardEl.classList.contains('bento-status-card')) {
+                type = 3.0;
+                c1 = [0.06, 0.83, 0.45]; // Emerald
+                c2 = [0.05, 0.45, 0.85]; // Teal
+            }
+            
+            const stateObj = {
+                el: cardEl,
+                canvas,
+                ctx,
+                type,
+                c1,
+                c2,
+                isHovered: false,
+                hoverVal: 0.0
             };
-        }).slice(0, 7);
 
+            cardEl.addEventListener('mouseenter', () => {
+                stateObj.isHovered = true;
+                if (canvas) {
+                    canvas.width = cardEl.offsetWidth;
+                    canvas.height = cardEl.offsetHeight;
+                }
+            });
+
+            cardEl.addEventListener('mouseleave', () => {
+                stateObj.isHovered = false;
+            });
+
+            return stateObj;
+        });
+
+        // Start render animation frame loop
+        requestAnimationFrame(renderLoop);
+    }
+
+    function renderLoop() {
         cards.forEach(c => {
-            c.el.addEventListener('mouseenter', () => {
-                c.target = 1.0;
-            });
-            c.el.addEventListener('mouseleave', () => c.target = 0.0);
-        });
-
-        // Layout Cache System - Prevents Layout Thrashing and Jitter Loops
-        const layoutCache = {
-            cards: [],
-            vWindows: []
-        };
-
-        function getAbsoluteOffset(el) {
-            let top = 0, left = 0;
-            const width = el.offsetWidth;
-            const height = el.offsetHeight;
-            let current = el;
-            while (current) {
-                top += current.offsetTop || 0;
-                left += current.offsetLeft || 0;
-                current = current.offsetParent;
-            }
-            return { top, left, width, height };
-        }
-
-        function cacheLayout() {
-            // Cache static card boundaries (immune to 3D transforms & reveals)
-            layoutCache.cards = cards.map(c => {
-                const off = getAbsoluteOffset(c.el);
-                return {
-                    type: c.type,
-                    absTop: off.top,
-                    absLeft: off.left,
-                    width: off.width,
-                    height: off.height
-                };
-            });
-
-            // Cache visual cutout cutouts
-            const projectCards = document.querySelectorAll('.project-card');
-            layoutCache.vWindows = Array.from(projectCards).map(el => {
-                const win = el.querySelector('.project-visual');
-                if (win) {
-                    const off = getAbsoluteOffset(win);
-                    return {
-                        absTop: off.top,
-                        absLeft: off.left,
-                        width: off.width,
-                        height: off.height
-                    };
-                }
-                return { absTop: 0, absLeft: 0, width: 0, height: 0 };
-            });
-        }
-
-        // Run layout measurements once at boot
-        setTimeout(cacheLayout, 200);
-
-        function resize() {
-            canvas.width  = window.innerWidth;
-            canvas.height = window.innerHeight;
-            gl.viewport(0, 0, canvas.width, canvas.height);
-        }
-        resize();
-
-        window.addEventListener('resize', () => {
-            resize();
-            cacheLayout();
-        });
-
-        // Mouse
-        window.addEventListener('mousemove', e => {
-            state.targetMouse.x = e.clientX / window.innerWidth;
-            state.targetMouse.y = 1.0 - e.clientY / window.innerHeight;
-        });
-
-        // Scroll velocity
-        let lastSY = 0, lastST = performance.now();
-        window.addEventListener('scroll', () => {
-            const now = performance.now();
-            const dt  = Math.max(1, now - lastST);
-            state.scrollVelocity = (window.scrollY - lastSY) / dt * 16;
-            lastSY = window.scrollY;
-            lastST = now;
-        }, { passive: true });
-
-        function render() {
-            // Ease mouse
-            state.mouse.x += (state.targetMouse.x - state.mouse.x) * 0.06;
-            state.mouse.y += (state.targetMouse.y - state.mouse.y) * 0.06;
-            // Ease scroll velocity decay
-            state.easedVelocity += (state.scrollVelocity - state.easedVelocity) * 0.12;
-            state.scrollVelocity *= 0.88;
-            // Ease card hovers
-            cards.forEach(c => { c.hover += (c.target - c.hover) * 0.08; });
-
-            const t = (Date.now() - state.startTime) / 1000;
-            gl.uniform1f(U.u_time, t);
-            gl.uniform2f(U.u_mouse, state.mouse.x, state.mouse.y);
-            gl.uniform1f(U.u_scroll, state.easedVelocity);
-            gl.uniform2f(U.u_res, canvas.width, canvas.height);
-
-            // Pass card spotlights (calculated relative to scroll via cached layout offsets and hover offsets)
-            layoutCache.cards.forEach((c, i) => {
-                const hoverOffset = cards[i].hover * 6.0; // matches CSS translateY(-6px) shift
-                const viewportLeft = c.absLeft - window.scrollX;
-                const viewportTop = c.absTop - window.scrollY - hoverOffset;
-                const cx = (viewportLeft + c.width * 0.5) / window.innerWidth;
-                const cy = 1.0 - (viewportTop + c.height * 0.5) / window.innerHeight;
-
-                const k = i.toString();
-                gl.uniform2f(U[`u_p${k}`], cx, cy);
-                gl.uniform1f(U[`u_h${k}`], cards[i].hover);
-                gl.uniform1f(U[`u_t${k}`], c.type);
-            });
-
-            // Pass project visual cutout window uniforms (adjusting for hover displacement)
-            for (let i = 0; i < 4; i++) {
-                const win = layoutCache.vWindows[i];
-                const c = cards[i];
-                if (win && c) {
-                    const hoverOffset = c.hover * 6.0; // matches CSS translateY(-6px) shift
-                    const viewportLeft = win.absLeft - window.scrollX;
-                    const viewportTop = win.absTop - window.scrollY - hoverOffset;
-                    const cx = (viewportLeft + win.width * 0.5) / window.innerWidth;
-                    const cy = 1.0 - (viewportTop + win.height * 0.5) / window.innerHeight;
-
-                    const ar = window.innerWidth / window.innerHeight;
-                    const sx = (win.width * 0.5) / window.innerWidth * ar;
-                    const sy = (win.height * 0.5) / window.innerHeight;
-
-                    gl.uniform2f(U_vpos[i], cx * ar, cy);
-                    gl.uniform2f(U_vsize[i], sx, sy);
-                    gl.uniform1f(U_vhover[i], c.hover);
-                } else {
-                    gl.uniform2f(U_vpos[i], 0.0, 0.0);
-                    gl.uniform2f(U_vsize[i], 0.0, 0.0);
-                    gl.uniform1f(U_vhover[i], 0.0);
-                }
+            if (c.isHovered) {
+                c.hoverVal += (1.0 - c.hoverVal) * 0.08;
+            } else {
+                c.hoverVal += (0.0 - c.hoverVal) * 0.08;
             }
 
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            requestAnimationFrame(render);
-        }
-        render();
-        console.log('%c✅ Kunu WebGL Shader Active', 'color:#00F0FF;font-weight:bold;font-size:14px');
-    }
-
-    // ========================================================================
-    // REVEAL ANIMATIONS — Fixed for Bento Grid elements
-    // ========================================================================
-    function initRevealAnimations() {
-        // Trigger first 3 bento cards (Intro, Code, Stack) immediately on load
-        setTimeout(() => {
-            ['#bento-intro', '#bento-code', '#bento-stack'].forEach((id, idx) => {
-                const el = document.querySelector(id);
-                if (el) {
-                    setTimeout(() => el.classList.add('visible'), idx * 100);
+            if (c.hoverVal > 0.01 && c.ctx && c.canvas) {
+                // Resize shared rendering canvas to match local dimensions
+                if (sharedCanvas.width !== c.canvas.width || sharedCanvas.height !== c.canvas.height) {
+                    sharedCanvas.width = c.canvas.width;
+                    sharedCanvas.height = c.canvas.height;
+                    gl.viewport(0, 0, sharedCanvas.width, sharedCanvas.height);
                 }
-            });
-        }, 80);
 
-        // Scroll-triggered reveals for other bento cards (projects & lab cards)
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('visible');
-                    observer.unobserve(entry.target);
-                }
-            });
-        }, { threshold: 0.05, rootMargin: '0px 0px -20px 0px' });
+                // Render specific shader style on shared context
+                gl.useProgram(shaderProgram);
+                gl.uniform1f(uTimeLoc, (Date.now() - startTime) / 1000.0);
+                gl.uniform2f(uResLoc, sharedCanvas.width, sharedCanvas.height);
+                gl.uniform1f(uTypeLoc, c.type);
+                gl.uniform3f(uC1Loc, c.c1[0], c.c1[1], c.c1[2]);
+                gl.uniform3f(uC2Loc, c.c2[0], c.c2[1], c.c2[2]);
+                
+                gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-        // Observe other cards that have anim-up
-        document.querySelectorAll('.bento-card.anim-up').forEach(el => {
-            if (el.id !== 'bento-intro' && el.id !== 'bento-code' && el.id !== 'bento-stack') {
-                observer.observe(el);
+                // Copy onto card 2D context
+                c.ctx.clearRect(0, 0, c.canvas.width, c.canvas.height);
+                c.ctx.drawImage(sharedCanvas, 0, 0);
             }
         });
+
+        requestAnimationFrame(renderLoop);
     }
 
-
-
-    // ========================================================================
-    // NAVBAR
-    // ========================================================================
-    function initNavbarScroll() {
-        const nav = document.querySelector('.navbar');
-        if (!nav) return;
-        window.addEventListener('scroll', () => {
-            nav.classList.toggle('scrolled', window.scrollY > 60);
-        }, { passive: true });
-        // Smooth scroll for nav links
-        document.querySelectorAll('a[href^="#"]').forEach(link => {
-            link.addEventListener('click', e => {
-                const target = document.getElementById(link.getAttribute('href').slice(1));
-                if (!target) return;
-                e.preventDefault();
-                window.scrollTo({ top: target.offsetTop - 70, behavior: 'smooth' });
-            });
-        });
-    }
-
-    // ========================================================================
-    // CODE TERMINAL REVEAL
-    // ========================================================================
-    function animateCodeLines() {
-        document.querySelectorAll('.code-line').forEach((line, i) => {
-            setTimeout(() => line.classList.add('visible'), 500 + i * 160);
-        });
-    }
-
-    // ========================================================================
-    // FOOTER YEAR
-    // ========================================================================
-    function updateFooterYear() {
-        const el = document.getElementById('footer-copyright');
-        if (el) el.textContent = `© ${new Date().getFullYear()} Prashanta Kumar Mahanat / Kunu AI Labs.`;
-    }
-
-    console.log('%c🚀 Kunu AI Labs', 'color:#00F0FF;font-size:20px;font-weight:bold');
-    console.log('%cArchitecting Intelligence.', 'color:#7000FF;font-size:13px');
+    console.log('%c🚀 Kunu AI Labs Redesigned', 'color:#0ea5e9;font-size:18px;font-weight:bold');
 })();
